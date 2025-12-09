@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Büyülü Gece Bahçesi - Belirgin Saplar</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #000000;
+            background-image: radial-gradient(circle at 50% 100%, #1a0b0b, #000000); 
+            font-family: 'Segoe UI', sans-serif; 
+            touch-action: none;
+        }
+        canvas { 
+            display: block; 
+            width: 100%;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="garden"></canvas>
+
+<script>
+const canvas = document.getElementById('garden');
+const ctx = canvas.getContext('2d');
+
+let width, height;
+let particles = [];
+let fireflies = [];
+let targetPoints = [];
+
+// AYARLAR
+const CONFIG = {
+    // Toplam partikül sayısını biraz artırdım çünkü saplar için daha fazlasına ihtiyacımız var
+    particleCount: 3500, 
+    flightDuration: 250, 
+    windStrength: 0.002  
+};
+
+function resize() {
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    width = canvas.width = window.innerWidth * dpr;
+    height = canvas.height = window.innerHeight * dpr;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.scale(dpr, dpr);
+    
+    init();
+}
+window.addEventListener('resize', resize);
+
+/* ------------------------------------------------
+   YARDIMCI FONKSİYONLAR
+------------------------------------------------ */
+function getRoseColor(radiusRatio) {
+    const hueVar = Math.random() * 10 - 5; 
+    const h = 350 + hueVar; 
+    const s = 90 - (radiusRatio * 10); 
+    let l = 10 + (radiusRatio * 45); 
+    if (Math.random() > 0.98) return `rgba(255, 255, 255, 0.9)`;
+    return `hsla(${h}, ${s}%, ${l}%, 1)`;
+}
+
+// DEĞİŞİKLİK 1: Sap Rengi Daha Canlı ve Parlak Yapıldı
+function getStemColor() {
+    // Hue (Ton): 100-125 arası (daha taze yeşil)
+    const h = 100 + Math.random() * 25;
+    // Saturation (Doygunluk): %55-85 arası (daha canlı)
+    const s = 55 + Math.random() * 30;
+    // Lightness (Parlaklık): %25-50 arası (daha aydınlık, böylece daha belirgin)
+    const l = 25 + Math.random() * 25;
+    return `hsla(${h}, ${s}%, ${l}%, 1)`;
+}
+
+function getDist(x1, y1, x2, y2) {
+    return Math.sqrt((x1-x2)**2 + (y1-y2)**2);
+}
+
+// Güllerin oluşturulması
+function createVolumetricRose(cx, cy, maxRadius) {
+    const pts = [];
+    const count = 90 + Math.random() * 40; 
+
+    for (let i = 0; i < count; i++) {
+        const theta = i * 2.39996; 
+        const r = maxRadius * Math.sqrt(i / count);
+        const noise = (Math.random() - 0.5) * (maxRadius * 0.15);
+        
+        let x = cx + Math.cos(theta) * r + noise;
+        let y = cy + Math.sin(theta) * r * 0.8 + noise; 
+
+        const normalizedR = r / maxRadius;
+        
+        pts.push({
+            x: x,
+            y: y,
+            color: getRoseColor(normalizedR),
+            size: (Math.random() * 2 + 1.0) * (0.5 + normalizedR),
+            type: 'petal'
+        });
+    }
+    return pts;
+}
+
+/* ------------------------------------------------
+   HEDEF OLUŞTURMA
+------------------------------------------------ */
+function generateTargets() {
+    targetPoints = [];
+    const sw = window.innerWidth;
+    const sh = window.innerHeight;
+    
+    const scaleFactor = Math.min(sw, sh) / 1000; 
+    const flowerCount = 15; 
+    
+    const spreadX = sw * 0.25; 
+    const spreadY = sh * 0.25;
+    
+    const centerX = sw / 2;
+    const centerY = sh * 0.45; 
+    const stemBase = sh + 50; 
+
+    let placedFlowers = [];
+
+    // 1. GÜLLER
+    for(let i=0; i<flowerCount; i++) {
+        let safe = false;
+        let attempts = 0;
+        let roseX, roseY, roseSize;
+
+        while(!safe && attempts < 500) {
+            attempts++;
+            const rx = (Math.random() - 0.5) * 2 * spreadX; 
+            const ry = (Math.random() - 0.5) * 2 * spreadY;
+
+            roseX = centerX + rx;
+            roseY = centerY + ry;
+            
+            const depth = (roseY - (centerY - spreadY)) / (spreadY * 2);
+            
+            const baseSize = 22 * scaleFactor * 1.5; 
+            const growth = 30 * scaleFactor;
+            roseSize = Math.max(10, baseSize + (depth * growth));
+
+            let overlap = false;
+            for(let f of placedFlowers) {
+                const dist = getDist(roseX, roseY, f.x, f.y);
+                if(dist < (roseSize + f.size) * 0.9) { 
+                    overlap = true;
+                    break;
+                }
+            }
+            if (roseX < roseSize || roseX > sw - roseSize) overlap = true;
+
+            if(!overlap) safe = true;
+        }
+
+        if (safe) {
+            placedFlowers.push({ x: roseX, y: roseY, size: roseSize });
+            targetPoints.push(...createVolumetricRose(roseX, roseY, roseSize));
+
+            // 2. SAPLAR (Önemli Değişiklikler Burada)
+            const distToBottom = Math.abs(stemBase - roseY);
+            
+            // DEĞİŞİKLİK 2: Yoğunluk Artırıldı
+            // Bölen sayıyı (eskiden 35'ti) küçülttük (12 yaptık). 
+            // Bu, noktaların birbirine daha yakın olmasını sağlar, böylece sap daha "dolu" görünür.
+            const stemSteps = Math.floor(distToBottom / (12 * scaleFactor)); 
+            
+            const cpX = (centerX + roseX) / 2 + (Math.random()-0.5) * 100 * scaleFactor;
+            const cpY = (stemBase + roseY) / 2;
+
+            for(let k=0; k<=stemSteps; k++) { // k<=stemSteps yaparak son noktayı da dahil ettik
+                const t = k / stemSteps;
+                const sx = (1-t)*(1-t)*centerX + 2*(1-t)*t*cpX + t*t*roseX;
+                const sy = (1-t)*(1-t)*stemBase + 2*(1-t)*t*cpY + t*t*roseY;
+                
+                targetPoints.push({
+                    x: sx + (Math.random()-0.5) * 3, // Titreşimi biraz artırdık
+                    y: sy,
+                    color: getStemColor(),
+                    // DEĞİŞİKLİK 3: Sap Partikül Boyutu Büyütüldü
+                    // Eskiden: (Math.random() * 1.5 + 0.5) idi.
+                    // Şimdi: En az 2 kat daha büyük.
+                    size: (Math.random() * 2.5 + 2.0) * scaleFactor, 
+                    type: 'stem'
+                });
+            }
+        }
+    }
+
+    // 3. YAPRAKLAR
+    const leafCount = 250;
+    for(let i=0; i<leafCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const r = Math.random() * Math.max(spreadX, spreadY) * 1.5; 
+        const lx = centerX + Math.cos(angle) * r;
+        const ly = centerY + Math.sin(angle) * (r * 0.8) + 50;
+
+        if (ly < stemBase && ly > centerY) {
+            targetPoints.push({
+                x: lx,
+                y: ly,
+                color: getStemColor(),
+                // Yaprak boyutlarını da saplarla uyumlu olması için biraz büyüttük
+                size: (Math.random() * 3 + 1.5) * scaleFactor,
+                type: 'leaf'
+            });
+        }
+    }
+}
+
+/* ------------------------------------------------
+   PARTİKÜL SINIFI
+------------------------------------------------ */
+class Particle {
+    constructor(target, delay) {
+        const sw = window.innerWidth;
+        const sh = window.innerHeight;
+
+        this.startX = sw / 2;
+        this.startY = sh + 100;
+        
+        this.x = this.startX;
+        this.y = this.startY;
+
+        this.tx = target.x;
+        this.ty = target.y;
+        this.color = target.color;
+        this.size = target.size;
+        this.type = target.type;
+
+        this.spiralDir = Math.random() > 0.5 ? 1 : -1;
+        this.delay = delay;
+    }
+
+    update(frame) {
+        let t = Math.max(0, (frame - this.delay) / CONFIG.flightDuration);
+
+        if (t < 1) {
+            const ease = t * t * (3 - 2 * t);
+            const linearX = this.startX + (this.tx - this.startX) * ease;
+            const linearY = this.startY + (this.ty - this.startY) * ease;
+
+            const maxSpiralSize = Math.min(window.innerWidth, window.innerHeight) * 0.45;
+            const currentSpiralRadius = (1 - ease) * maxSpiralSize;
+            const angle = t * Math.PI * 5 * this.spiralDir; 
+
+            this.x = linearX + Math.cos(angle) * currentSpiralRadius;
+            this.y = linearY + Math.sin(angle) * (currentSpiralRadius * 0.35); 
+        } else {
+            const time = Date.now() * CONFIG.windStrength;
+            const swayAmt = this.type === 'petal' ? 1.5 : 0.5;
+            const swayX = Math.sin(time + this.ty * 0.01) * swayAmt;
+            const swayY = Math.cos(time + this.tx * 0.01) * swayAmt;
+
+            this.x = this.tx + swayX;
+            this.y = this.ty + swayY;
+        }
+    }
+
+    draw() {
+        ctx.beginPath();
+        ctx.fillStyle = this.color;
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+class Firefly {
+    constructor() { this.init(); }
+    init() {
+        this.x = Math.random() * window.innerWidth;
+        this.y = Math.random() * window.innerHeight;
+        this.size = Math.random() * 2;
+        this.speedX = (Math.random() - 0.5) * 0.8;
+        this.speedY = (Math.random() - 0.5) * 0.8;
+        this.alpha = 0;
+        this.cycle = Math.random() * Math.PI * 2;
+    }
+    update() {
+        this.x += this.speedX;
+        this.y += this.speedY;
+        this.cycle += 0.05;
+        this.alpha = (Math.sin(this.cycle) + 1) / 2 * 0.8;
+        if (this.x < -10 || this.x > window.innerWidth + 10 || this.y < -10 || this.y > window.innerHeight + 10) this.init();
+    }
+    draw() {
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(255, 220, 150, ${this.alpha})`;
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+/* ------------------------------------------------
+   ANA DÖNGÜ
+------------------------------------------------ */
+function init() {
+    particles = [];
+    fireflies = [];
+    generateTargets(); 
+    
+    targetPoints.sort(() => Math.random() - 0.5);
+    
+    // Toplam partikül limitini kullan, eğer hedef nokta sayısı daha azsa onu kullan
+    const total = Math.min(targetPoints.length, CONFIG.particleCount);
+
+    for(let i = 0; i < total; i++) {
+        const delay = Math.random() * 200; 
+        particles.push(new Particle(targetPoints[i], delay));
+    }
+
+    const fireflyCount = 45; 
+    for(let i = 0; i < fireflyCount; i++) {
+        fireflies.push(new Firefly());
+    }
+}
+
+let frame = 0;
+function animate() {
+    frame++;
+    
+    // Işık izi efektini biraz azalttım ki kalın saplar çok fazla bulanıklaşmasın
+    ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    
+    ctx.globalCompositeOperation = 'lighter';
+
+    particles.forEach(p => {
+        p.update(frame);
+        p.draw();
+    });
+
+    fireflies.forEach(f => {
+        f.update();
+        f.draw();
+    });
+
+    ctx.globalCompositeOperation = 'source-over';
+    requestAnimationFrame(animate);
+}
+
+resize();
+animate();
+
+</script>
+</body>
+</html>
